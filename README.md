@@ -75,6 +75,8 @@ The app uses Vite. Vercel should detect the settings from `vercel.json`:
 - Build command: `npm run build`
 - Output directory: `dist`
 
+See `docs/deployment.md` for the Supabase and Vercel cloud setup checklist.
+
 ## Next Product Slices
 
 - Replace sample data reads/writes with Supabase queries.
