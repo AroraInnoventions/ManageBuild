@@ -18,6 +18,7 @@ body {
 
 button,
 input,
+textarea,
 select {
   font: inherit;
 }
@@ -435,6 +436,66 @@ button {
   color: #443814;
   font-size: 0.8rem;
   line-height: 1.35;
+}
+
+.impedimentEditor {
+  background: #fffaf0;
+  border: 1px solid #e8cf85;
+  border-radius: 7px;
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 9px;
+}
+
+.impedimentEditor label {
+  color: #73540d;
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.impedimentEditor textarea {
+  background: white;
+  border: 1px solid #dcc783;
+  border-radius: 7px;
+  color: #17231f;
+  min-height: 78px;
+  outline: 0;
+  padding: 8px;
+  resize: vertical;
+  width: 100%;
+}
+
+.impedimentEditor textarea:focus {
+  border-color: #9d532e;
+  box-shadow: 0 0 0 3px rgba(157, 83, 46, 0.14);
+}
+
+.impedimentEditorActions {
+  display: flex;
+  gap: 8px;
+}
+
+.impedimentEditorActions button {
+  border: 1px solid #d9c278;
+  border-radius: 7px;
+  color: #73540d;
+  font-size: 0.8rem;
+  font-weight: 800;
+  min-height: 32px;
+  padding: 0 10px;
+}
+
+.impedimentEditorActions button:first-child {
+  background: #73540d;
+  border-color: #73540d;
+  color: white;
+}
+
+.impedimentEditorActions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .taskActions {

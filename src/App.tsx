@@ -54,6 +54,8 @@ export function App() {
   const [query, setQuery] = useState("");
   const [assigneeFilter, setAssigneeFilter] = useState("all");
   const [newTask, setNewTask] = useState<NewTaskFields>(emptyTask);
+  const [editingImpedimentTaskId, setEditingImpedimentTaskId] = useState<string | null>(null);
+  const [impedimentDraft, setImpedimentDraft] = useState("");
 
   const activeProject = sampleProjects.find((project) => project.id === activeProjectId) ?? sampleProjects[0];
   const activeProjectTasks = tasks.filter((task) => task.projectId === activeProject.id);
@@ -108,23 +110,26 @@ export function App() {
     );
   }
 
-  function captureImpediment(taskId: string) {
-    const task = tasks.find((candidate) => candidate.id === taskId);
-    if (!task) return;
+  function openImpedimentEditor(task: BuildTask) {
+    setEditingImpedimentTaskId(task.id);
+    setImpedimentDraft(task.impedimentText ?? "");
+  }
 
-    if (task.hasImpediment) {
-      setTasks((current) =>
-        current.map((candidate) =>
-          candidate.id === taskId
-            ? { ...candidate, hasImpediment: false, impedimentText: null, updatedAt: new Date().toISOString() }
-            : candidate
-        )
-      );
-      return;
-    }
+  function clearImpediment(taskId: string) {
+    setEditingImpedimentTaskId((current) => (current === taskId ? null : current));
+    setImpedimentDraft("");
+    setTasks((current) =>
+      current.map((candidate) =>
+        candidate.id === taskId
+          ? { ...candidate, hasImpediment: false, impedimentText: null, updatedAt: new Date().toISOString() }
+          : candidate
+      )
+    );
+  }
 
-    const impedimentText = window.prompt("Enter the impediment");
-    if (!impedimentText?.trim()) return;
+  function saveImpediment(taskId: string) {
+    const text = impedimentDraft.trim();
+    if (!text) return;
 
     setTasks((current) =>
       current.map((task) =>
@@ -132,12 +137,26 @@ export function App() {
           ? {
               ...task,
               hasImpediment: true,
-              impedimentText: impedimentText.trim(),
+              impedimentText: text,
               updatedAt: new Date().toISOString()
             }
           : task
       )
     );
+    setEditingImpedimentTaskId(null);
+    setImpedimentDraft("");
+  }
+
+  function handleImpedimentAction(taskId: string) {
+    const task = tasks.find((candidate) => candidate.id === taskId);
+    if (!task) return;
+
+    if (task.hasImpediment) {
+      clearImpediment(taskId);
+      return;
+    }
+
+    openImpedimentEditor(task);
   }
 
   function addTask(event: FormEvent<HTMLFormElement>) {
@@ -381,6 +400,39 @@ export function App() {
                             <span>{task.impedimentText}</span>
                           </div>
                         ) : null}
+                        {editingImpedimentTaskId === task.id ? (
+                          <form
+                            className="impedimentEditor"
+                            onSubmit={(event) => {
+                              event.preventDefault();
+                              saveImpediment(task.id);
+                            }}
+                          >
+                            <label htmlFor={`impediment-${task.id}`}>Impediment</label>
+                            <textarea
+                              autoFocus
+                              id={`impediment-${task.id}`}
+                              onChange={(event) => setImpedimentDraft(event.target.value)}
+                              placeholder="What is preventing progress?"
+                              rows={3}
+                              value={impedimentDraft}
+                            />
+                            <div className="impedimentEditorActions">
+                              <button disabled={!impedimentDraft.trim()} type="submit">
+                                Save
+                              </button>
+                              <button
+                                onClick={() => {
+                                  setEditingImpedimentTaskId(null);
+                                  setImpedimentDraft("");
+                                }}
+                                type="button"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          </form>
+                        ) : null}
                         <div className="taskMeta">
                           <span>{task.assigneeName ?? "Unassigned"}</span>
                           {task.dueDate ? <span>Due {new Date(task.dueDate).toLocaleDateString()}</span> : null}
@@ -398,7 +450,7 @@ export function App() {
                           <button
                             aria-label={task.hasImpediment ? `Clear impediment for ${task.title}` : `Add impediment for ${task.title}`}
                             className={task.hasImpediment ? "impedimentButton active" : "impedimentButton"}
-                            onClick={() => captureImpediment(task.id)}
+                            onClick={() => handleImpedimentAction(task.id)}
                             title={task.hasImpediment ? "Clear impediment" : "Add impediment"}
                             type="button"
                           >
