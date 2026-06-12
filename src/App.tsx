@@ -111,7 +111,6 @@ export function App() {
   const [query, setQuery] = useState("");
   const [assigneeFilter, setAssigneeFilter] = useState("all");
   const [newTask, setNewTask] = useState<NewTaskFields>(emptyTask);
-  const [email, setEmail] = useState("");
   const [editingImpedimentTaskId, setEditingImpedimentTaskId] = useState<string | null>(null);
   const [impedimentDraft, setImpedimentDraft] = useState("");
 
@@ -140,6 +139,7 @@ export function App() {
 
   const activeProject = projects.find((project) => project.id === activeProjectId) ?? projects[0];
   const activeProjectTasks = activeProject ? tasks.filter((task) => task.projectId === activeProject.id) : [];
+  const isDbMode = Boolean(supabase && session);
   const projectTasks = activeProjectTasks
     .filter((task) => {
       const text = `${task.title} ${task.description} ${task.assigneeName ?? ""}`.toLowerCase();
@@ -153,7 +153,7 @@ export function App() {
     const accepted = activeProjectTasks.filter((task) => task.lane === "accept").length;
     const total = activeProjectTasks.length || 1;
     return [
-      { label: "Cycle time", value: "Live", trend: "from DB" },
+      { label: "Cycle time", value: isDbMode ? "Live" : "Preview", trend: isDbMode ? "saved" : "sample data" },
       { label: "Throughput", value: `${accepted}`, trend: "accepted cards" },
       {
         label: "Impediments",
@@ -179,7 +179,10 @@ export function App() {
   );
 
   const requirementOptions = activeProjectTasks.filter((task) => task.lane === "requirements");
-  const isDbMode = Boolean(supabase && session);
+
+  function showError(message: string) {
+    setError(message.replace(/supabase/gi, "workspace service"));
+  }
 
   async function loadBoard() {
     if (!supabase) return;
@@ -280,7 +283,7 @@ export function App() {
         return nextProjects[0]?.id ?? "";
       });
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Unable to load board data.");
+      showError(caught instanceof Error ? caught.message : "Unable to load board data.");
     } finally {
       setDataLoading(false);
     }
@@ -321,7 +324,7 @@ export function App() {
         .update({ lane: nextLane, accepted_at: nextLane === "accept" ? new Date().toISOString() : null })
         .eq("id", taskId);
       if (updateError) {
-        setError(updateError.message);
+        showError(updateError.message);
         await loadBoard();
       }
     }
@@ -349,7 +352,7 @@ export function App() {
         .update({ has_impediment: false, impediment_text: null })
         .eq("id", taskId);
       if (updateError) {
-        setError(updateError.message);
+        showError(updateError.message);
         await loadBoard();
       }
     }
@@ -380,7 +383,7 @@ export function App() {
         .update({ has_impediment: true, impediment_text: text })
         .eq("id", taskId);
       if (updateError) {
-        setError(updateError.message);
+        showError(updateError.message);
         await loadBoard();
       }
     }
@@ -404,7 +407,7 @@ export function App() {
     if (supabase && session) {
       const { error: deleteError } = await supabase.from("corp_tasks").delete().eq("id", taskId);
       if (deleteError) {
-        setError(deleteError.message);
+        showError(deleteError.message);
         await loadBoard();
       }
     }
@@ -456,7 +459,7 @@ export function App() {
       .single();
 
     if (insertError) {
-      setError(insertError.message);
+      showError(insertError.message);
       return;
     }
 
@@ -467,42 +470,12 @@ export function App() {
         created_by: session.user.id
       });
       if (dependencyError) {
-        setError(dependencyError.message);
+        showError(dependencyError.message);
       }
     }
 
     setNewTask(emptyTask);
     await loadBoard();
-  }
-
-  async function signInWithGoogle() {
-    if (!supabase) return;
-    const { error: signInError } = await supabase.auth.signInWithOAuth({
-      provider: "google",
-      options: {
-        redirectTo: window.location.origin
-      }
-    });
-    if (signInError) setError(signInError.message);
-  }
-
-  async function signInWithEmail(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!supabase || !email.trim()) return;
-
-    const { error: signInError } = await supabase.auth.signInWithOtp({
-      email: email.trim(),
-      options: {
-        emailRedirectTo: window.location.origin
-      }
-    });
-
-    if (signInError) {
-      setError(signInError.message);
-      return;
-    }
-
-    setError("Check your email for the sign-in link.");
   }
 
   async function signOut() {
@@ -517,32 +490,6 @@ export function App() {
     return <main className="startupError">Loading Manage Build...</main>;
   }
 
-  if (isSupabaseConfigured && !session) {
-    return (
-      <main className="authScreen">
-        <section className="authPanel">
-          <div className="brandMark">MB</div>
-          <h1>Manage Build</h1>
-          <p>Sign in to manage real projects, tasks, dependencies, and impediments from Supabase.</p>
-          <form className="authForm" onSubmit={signInWithEmail}>
-            <input
-              aria-label="Email"
-              onChange={(event) => setEmail(event.target.value)}
-              placeholder="you@example.com"
-              type="email"
-              value={email}
-            />
-            <button type="submit">Email sign-in link</button>
-          </form>
-          <button onClick={signInWithGoogle} type="button">
-            Continue with Google
-          </button>
-          {error ? <span>{error}</span> : null}
-        </section>
-      </main>
-    );
-  }
-
   if (!activeProject) {
     return <main className="startupError">No projects found.</main>;
   }
@@ -554,7 +501,7 @@ export function App() {
           <div className="brandMark">MB</div>
           <div>
             <h1>Manage Build</h1>
-            <p>{isDbMode ? "Supabase live" : "Local demo mode"}</p>
+            <p>{isDbMode ? "Live workspace" : "Preview workspace"}</p>
           </div>
         </div>
 
@@ -648,7 +595,7 @@ export function App() {
         </header>
 
         {error ? <div className="appNotice">{error}</div> : null}
-        {dataLoading ? <div className="appNotice">Syncing with Supabase...</div> : null}
+        {dataLoading ? <div className="appNotice">Syncing workspace...</div> : null}
 
         <section className="metrics" aria-label="Agile performance metrics">
           {metrics.map((metric) => (
