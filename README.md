@@ -12,6 +12,8 @@ The first implementation includes a responsive Kanban board, local sample data m
 
 Requirements can depend on other requirements. The schema stores task dependencies separately so one requirement can block one or many downstream cards without duplicating status data.
 
+The Supabase migration uses a `corp_` prefix for application tables, views, functions, and custom types so it can live safely in a shared company database.
+
 ## Roles
 
 Lane roles match the board lanes for now. A user can hold more than one lane role on a project:

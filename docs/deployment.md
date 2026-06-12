@@ -16,6 +16,8 @@ supabase link --project-ref your-project-ref
 supabase db push
 ```
 
+The migration creates `corp_`-prefixed database objects to keep this app isolated inside a shared database.
+
 4. In Supabase, copy:
 
 - Project URL
