@@ -34,6 +34,78 @@ body {
   margin: 0;
 }
 
+.authScreen {
+  align-items: center;
+  background: #f7faf7;
+  display: flex;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 24px;
+}
+
+.authPanel {
+  background: white;
+  border: 1px solid #dfe7e2;
+  border-radius: 8px;
+  display: grid;
+  gap: 12px;
+  max-width: 420px;
+  padding: 24px;
+  width: 100%;
+}
+
+.authPanel h1,
+.authPanel p {
+  margin: 0;
+}
+
+.authPanel p,
+.authPanel span {
+  color: #55645f;
+}
+
+.authPanel button,
+.iconTextButton {
+  align-items: center;
+  background: #1b4d3e;
+  border: 0;
+  border-radius: 7px;
+  color: white;
+  display: inline-flex;
+  font-weight: 800;
+  gap: 8px;
+  justify-content: center;
+  min-height: 40px;
+  padding: 0 14px;
+}
+
+.authForm {
+  display: grid;
+  gap: 10px;
+}
+
+.authForm input {
+  border: 1px solid #dfe7e2;
+  border-radius: 7px;
+  min-height: 40px;
+  outline: 0;
+  padding: 0 12px;
+}
+
+.authForm input:focus {
+  border-color: #1b4d3e;
+  box-shadow: 0 0 0 3px rgba(27, 77, 62, 0.14);
+}
+
+.appNotice {
+  background: #fffaf0;
+  border: 1px solid #e8cf85;
+  border-radius: 8px;
+  color: #73540d;
+  margin-top: 18px;
+  padding: 10px 12px;
+}
+
 button,
 input,
 textarea,

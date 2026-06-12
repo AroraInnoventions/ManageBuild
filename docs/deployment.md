@@ -18,6 +18,14 @@ supabase db push
 
 The migration creates `corp_`-prefixed database objects to keep this app isolated inside a shared database.
 
+If the app has already been deployed, rerun this command after every new migration is added. The bootstrap migration creates signed-in user profiles and starter data:
+
+```bash
+supabase db push
+```
+
+Use the Supabase project database password when prompted, not your Google account password.
+
 4. In Supabase, copy:
 
 - Project URL

@@ -1,4 +1,4 @@
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -7,14 +7,17 @@ import {
   CirclePlus,
   Filter,
   Gauge,
+  LogOut,
   Search,
   ShieldCheck,
+  Trash2,
   Users
 } from "lucide-react";
+import type { Session } from "@supabase/supabase-js";
 import { laneLabels, priorityLabels, systemRoleLabels } from "./lib/labels";
-import { sampleMetrics, sampleProjects, sampleTasks } from "./lib/sampleData";
-import { isSupabaseConfigured } from "./lib/supabase";
-import { BuildTask, Lane, Priority, lanes } from "./lib/types";
+import { sampleProjects, sampleTasks } from "./lib/sampleData";
+import { isSupabaseConfigured, supabase } from "./lib/supabase";
+import { BuildTask, FlowMetric, Lane, Priority, Project, ProjectMember, lanes } from "./lib/types";
 
 const priorityOrder: Record<Priority, number> = {
   critical: 0,
@@ -39,6 +42,55 @@ type NewTaskFields = {
   dependencyId: string;
 };
 
+type DbProject = {
+  id: string;
+  customer_id: string;
+  name: string;
+  code: string;
+  description: string;
+  status: Project["status"];
+};
+
+type DbCustomer = {
+  id: string;
+  name: string;
+};
+
+type DbProfile = {
+  id: string;
+  full_name: string;
+  email: string;
+  global_role: ProjectMember["systemRole"];
+};
+
+type DbProjectMember = {
+  project_id: string;
+  user_id: string;
+  system_role: ProjectMember["systemRole"];
+  lane_roles: Lane[];
+};
+
+type DbTask = {
+  id: string;
+  project_id: string;
+  title: string;
+  description: string;
+  lane: Lane;
+  priority: Priority;
+  assignee_id: string | null;
+  story_points: number;
+  has_impediment: boolean;
+  impediment_text: string | null;
+  due_date: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type DbTaskDependency = {
+  task_id: string;
+  depends_on_task_id: string;
+};
+
 const emptyTask: NewTaskFields = {
   title: "",
   description: "",
@@ -49,16 +101,45 @@ const emptyTask: NewTaskFields = {
 };
 
 export function App() {
+  const [session, setSession] = useState<Session | null>(null);
+  const [authLoading, setAuthLoading] = useState(isSupabaseConfigured);
+  const [dataLoading, setDataLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [activeProjectId, setActiveProjectId] = useState(sampleProjects[0].id);
+  const [projects, setProjects] = useState<Project[]>(sampleProjects);
   const [tasks, setTasks] = useState<BuildTask[]>(sampleTasks);
   const [query, setQuery] = useState("");
   const [assigneeFilter, setAssigneeFilter] = useState("all");
   const [newTask, setNewTask] = useState<NewTaskFields>(emptyTask);
+  const [email, setEmail] = useState("");
   const [editingImpedimentTaskId, setEditingImpedimentTaskId] = useState<string | null>(null);
   const [impedimentDraft, setImpedimentDraft] = useState("");
 
-  const activeProject = sampleProjects.find((project) => project.id === activeProjectId) ?? sampleProjects[0];
-  const activeProjectTasks = tasks.filter((task) => task.projectId === activeProject.id);
+  useEffect(() => {
+    if (!supabase) return;
+
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session);
+      setAuthLoading(false);
+    });
+
+    const {
+      data: { subscription }
+    } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      setSession(nextSession);
+      setAuthLoading(false);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!supabase || !session) return;
+    void loadBoard();
+  }, [session]);
+
+  const activeProject = projects.find((project) => project.id === activeProjectId) ?? projects[0];
+  const activeProjectTasks = activeProject ? tasks.filter((task) => task.projectId === activeProject.id) : [];
   const projectTasks = activeProjectTasks
     .filter((task) => {
       const text = `${task.title} ${task.description} ${task.assigneeName ?? ""}`.toLowerCase();
@@ -67,6 +148,21 @@ export function App() {
       return matchesQuery && matchesAssignee;
     })
     .sort((a, b) => priorityOrder[a.priority] - priorityOrder[b.priority]);
+
+  const metrics = useMemo<FlowMetric[]>(() => {
+    const accepted = activeProjectTasks.filter((task) => task.lane === "accept").length;
+    const total = activeProjectTasks.length || 1;
+    return [
+      { label: "Cycle time", value: "Live", trend: "from DB" },
+      { label: "Throughput", value: `${accepted}`, trend: "accepted cards" },
+      {
+        label: "Impediments",
+        value: `${activeProjectTasks.filter((task) => task.hasImpediment).length}`,
+        trend: "active"
+      },
+      { label: "Acceptance rate", value: `${Math.round((accepted / total) * 100)}%`, trend: "current project" }
+    ];
+  }, [activeProjectTasks]);
 
   const laneTotals = useMemo(
     () =>
@@ -83,6 +179,112 @@ export function App() {
   );
 
   const requirementOptions = activeProjectTasks.filter((task) => task.lane === "requirements");
+  const isDbMode = Boolean(supabase && session);
+
+  async function loadBoard() {
+    if (!supabase) return;
+    setDataLoading(true);
+    setError(null);
+
+    try {
+      const { error: bootstrapError } = await supabase.rpc("corp_bootstrap_current_user");
+      if (bootstrapError) throw bootstrapError;
+
+      const [
+        projectsResult,
+        customersResult,
+        membersResult,
+        profilesResult,
+        tasksResult,
+        dependenciesResult
+      ] = await Promise.all([
+        supabase.from("corp_projects").select("id, customer_id, name, code, description, status").order("created_at"),
+        supabase.from("corp_customers").select("id, name"),
+        supabase.from("corp_project_members").select("project_id, user_id, system_role, lane_roles"),
+        supabase.from("corp_profiles").select("id, full_name, email, global_role"),
+        supabase.from("corp_tasks").select("*").order("created_at", { ascending: false }),
+        supabase.from("corp_task_dependencies").select("task_id, depends_on_task_id")
+      ]);
+
+      for (const result of [
+        projectsResult,
+        customersResult,
+        membersResult,
+        profilesResult,
+        tasksResult,
+        dependenciesResult
+      ]) {
+        if (result.error) throw result.error;
+      }
+
+      const customerById = new Map((customersResult.data as DbCustomer[]).map((customer) => [customer.id, customer]));
+      const profileById = new Map((profilesResult.data as DbProfile[]).map((profile) => [profile.id, profile]));
+      const membersByProject = new Map<string, ProjectMember[]>();
+
+      for (const member of membersResult.data as DbProjectMember[]) {
+        const profile = profileById.get(member.user_id);
+        const projectMembers = membersByProject.get(member.project_id) ?? [];
+        projectMembers.push({
+          id: member.user_id,
+          name: profile?.full_name ?? "Unknown user",
+          email: profile?.email ?? "",
+          roles: member.lane_roles,
+          systemRole: member.system_role
+        });
+        membersByProject.set(member.project_id, projectMembers);
+      }
+
+      const dependencyIdsByTask = new Map<string, string[]>();
+      for (const dependency of dependenciesResult.data as DbTaskDependency[]) {
+        const ids = dependencyIdsByTask.get(dependency.task_id) ?? [];
+        ids.push(dependency.depends_on_task_id);
+        dependencyIdsByTask.set(dependency.task_id, ids);
+      }
+
+      const nextProjects = (projectsResult.data as DbProject[]).map((project) => ({
+        id: project.id,
+        customerId: project.customer_id,
+        customerName: customerById.get(project.customer_id)?.name ?? "Unknown customer",
+        name: project.name,
+        code: project.code,
+        description: project.description,
+        status: project.status,
+        members: membersByProject.get(project.id) ?? []
+      }));
+
+      const nextTasks = (tasksResult.data as DbTask[]).map((task) => {
+        const assignee = task.assignee_id ? profileById.get(task.assignee_id) : null;
+        return {
+          id: task.id,
+          projectId: task.project_id,
+          title: task.title,
+          description: task.description,
+          lane: task.lane,
+          priority: task.priority,
+          assigneeId: task.assignee_id,
+          assigneeName: assignee?.full_name ?? null,
+          storyPoints: Number(task.story_points),
+          hasImpediment: task.has_impediment,
+          impedimentText: task.impediment_text,
+          dependencyIds: dependencyIdsByTask.get(task.id) ?? [],
+          dueDate: task.due_date,
+          createdAt: task.created_at,
+          updatedAt: task.updated_at
+        };
+      });
+
+      setProjects(nextProjects);
+      setTasks(nextTasks);
+      setActiveProjectId((current) => {
+        if (nextProjects.some((project) => project.id === current)) return current;
+        return nextProjects[0]?.id ?? "";
+      });
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Unable to load board data.");
+    } finally {
+      setDataLoading(false);
+    }
+  }
 
   function findTask(taskId: string) {
     return tasks.find((task) => task.id === taskId);
@@ -98,16 +300,31 @@ export function App() {
     return activeProjectTasks.filter((candidate) => candidate.dependencyIds.includes(task.id));
   }
 
-  function moveTask(taskId: string, direction: -1 | 1) {
+  async function moveTask(taskId: string, direction: -1 | 1) {
+    const task = findTask(taskId);
+    if (!task) return;
+    if (direction === 1 && getUnresolvedDependencies(task).length > 0) return;
+
+    const currentIndex = lanes.indexOf(task.lane);
+    const nextLane = lanes[currentIndex + direction];
+    if (!nextLane) return;
+
     setTasks((current) =>
-      current.map((task) => {
-        if (task.id !== taskId) return task;
-        if (direction === 1 && getUnresolvedDependencies(task).length > 0) return task;
-        const currentIndex = lanes.indexOf(task.lane);
-        const nextLane = lanes[currentIndex + direction];
-        return nextLane ? { ...task, lane: nextLane, updatedAt: new Date().toISOString() } : task;
-      })
+      current.map((candidate) =>
+        candidate.id === taskId ? { ...candidate, lane: nextLane, updatedAt: new Date().toISOString() } : candidate
+      )
     );
+
+    if (supabase && session) {
+      const { error: updateError } = await supabase
+        .from("corp_tasks")
+        .update({ lane: nextLane, accepted_at: nextLane === "accept" ? new Date().toISOString() : null })
+        .eq("id", taskId);
+      if (updateError) {
+        setError(updateError.message);
+        await loadBoard();
+      }
+    }
   }
 
   function openImpedimentEditor(task: BuildTask) {
@@ -115,7 +332,7 @@ export function App() {
     setImpedimentDraft(task.impedimentText ?? "");
   }
 
-  function clearImpediment(taskId: string) {
+  async function clearImpediment(taskId: string) {
     setEditingImpedimentTaskId((current) => (current === taskId ? null : current));
     setImpedimentDraft("");
     setTasks((current) =>
@@ -125,9 +342,20 @@ export function App() {
           : candidate
       )
     );
+
+    if (supabase && session) {
+      const { error: updateError } = await supabase
+        .from("corp_tasks")
+        .update({ has_impediment: false, impediment_text: null })
+        .eq("id", taskId);
+      if (updateError) {
+        setError(updateError.message);
+        await loadBoard();
+      }
+    }
   }
 
-  function saveImpediment(taskId: string) {
+  async function saveImpediment(taskId: string) {
     const text = impedimentDraft.trim();
     if (!text) return;
 
@@ -145,6 +373,17 @@ export function App() {
     );
     setEditingImpedimentTaskId(null);
     setImpedimentDraft("");
+
+    if (supabase && session) {
+      const { error: updateError } = await supabase
+        .from("corp_tasks")
+        .update({ has_impediment: true, impediment_text: text })
+        .eq("id", taskId);
+      if (updateError) {
+        setError(updateError.message);
+        await loadBoard();
+      }
+    }
   }
 
   function handleImpedimentAction(taskId: string) {
@@ -152,39 +391,160 @@ export function App() {
     if (!task) return;
 
     if (task.hasImpediment) {
-      clearImpediment(taskId);
+      void clearImpediment(taskId);
       return;
     }
 
     openImpedimentEditor(task);
   }
 
-  function addTask(event: FormEvent<HTMLFormElement>) {
+  async function deleteTask(taskId: string) {
+    setTasks((current) => current.filter((task) => task.id !== taskId));
+
+    if (supabase && session) {
+      const { error: deleteError } = await supabase.from("corp_tasks").delete().eq("id", taskId);
+      if (deleteError) {
+        setError(deleteError.message);
+        await loadBoard();
+      }
+    }
+  }
+
+  async function addTask(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!activeProject) return;
     const title = newTask.title.trim();
     if (!title) return;
 
-    setTasks((current) => [
-      {
-        id: crypto.randomUUID(),
-        projectId: activeProject.id,
+    const fallbackTask: BuildTask = {
+      id: crypto.randomUUID(),
+      projectId: activeProject.id,
+      title,
+      description: newTask.description.trim() || "No description yet.",
+      lane: newTask.lane,
+      priority: newTask.priority,
+      assigneeId: activeProject.members[0]?.id ?? session?.user.id ?? null,
+      assigneeName: activeProject.members[0]?.name ?? session?.user.email ?? null,
+      storyPoints: newTask.storyPoints,
+      hasImpediment: false,
+      impedimentText: null,
+      dependencyIds: newTask.dependencyId === "none" ? [] : [newTask.dependencyId],
+      dueDate: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+
+    if (!supabase || !session) {
+      setTasks((current) => [fallbackTask, ...current]);
+      setNewTask(emptyTask);
+      return;
+    }
+
+    const { data, error: insertError } = await supabase
+      .from("corp_tasks")
+      .insert({
+        project_id: activeProject.id,
         title,
-        description: newTask.description.trim() || "No description yet.",
+        description: fallbackTask.description,
         lane: newTask.lane,
         priority: newTask.priority,
-        assigneeId: activeProject.members[0]?.id ?? null,
-        assigneeName: activeProject.members[0]?.name ?? null,
-        storyPoints: newTask.storyPoints,
-        hasImpediment: false,
-        impedimentText: null,
-        dependencyIds: newTask.dependencyId === "none" ? [] : [newTask.dependencyId],
-        dueDate: null,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      },
-      ...current
-    ]);
+        assignee_id: session.user.id,
+        story_points: newTask.storyPoints,
+        created_by: session.user.id
+      })
+      .select("id")
+      .single();
+
+    if (insertError) {
+      setError(insertError.message);
+      return;
+    }
+
+    if (newTask.dependencyId !== "none") {
+      const { error: dependencyError } = await supabase.from("corp_task_dependencies").insert({
+        task_id: data.id,
+        depends_on_task_id: newTask.dependencyId,
+        created_by: session.user.id
+      });
+      if (dependencyError) {
+        setError(dependencyError.message);
+      }
+    }
+
     setNewTask(emptyTask);
+    await loadBoard();
+  }
+
+  async function signInWithGoogle() {
+    if (!supabase) return;
+    const { error: signInError } = await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: {
+        redirectTo: window.location.origin
+      }
+    });
+    if (signInError) setError(signInError.message);
+  }
+
+  async function signInWithEmail(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!supabase || !email.trim()) return;
+
+    const { error: signInError } = await supabase.auth.signInWithOtp({
+      email: email.trim(),
+      options: {
+        emailRedirectTo: window.location.origin
+      }
+    });
+
+    if (signInError) {
+      setError(signInError.message);
+      return;
+    }
+
+    setError("Check your email for the sign-in link.");
+  }
+
+  async function signOut() {
+    if (!supabase) return;
+    await supabase.auth.signOut();
+    setSession(null);
+    setProjects(sampleProjects);
+    setTasks(sampleTasks);
+  }
+
+  if (authLoading) {
+    return <main className="startupError">Loading Manage Build...</main>;
+  }
+
+  if (isSupabaseConfigured && !session) {
+    return (
+      <main className="authScreen">
+        <section className="authPanel">
+          <div className="brandMark">MB</div>
+          <h1>Manage Build</h1>
+          <p>Sign in to manage real projects, tasks, dependencies, and impediments from Supabase.</p>
+          <form className="authForm" onSubmit={signInWithEmail}>
+            <input
+              aria-label="Email"
+              onChange={(event) => setEmail(event.target.value)}
+              placeholder="you@example.com"
+              type="email"
+              value={email}
+            />
+            <button type="submit">Email sign-in link</button>
+          </form>
+          <button onClick={signInWithGoogle} type="button">
+            Continue with Google
+          </button>
+          {error ? <span>{error}</span> : null}
+        </section>
+      </main>
+    );
+  }
+
+  if (!activeProject) {
+    return <main className="startupError">No projects found.</main>;
   }
 
   return (
@@ -194,7 +554,7 @@ export function App() {
           <div className="brandMark">MB</div>
           <div>
             <h1>Manage Build</h1>
-            <p>{isSupabaseConfigured ? "Supabase connected" : "Local demo mode"}</p>
+            <p>{isDbMode ? "Supabase live" : "Local demo mode"}</p>
           </div>
         </div>
 
@@ -204,7 +564,7 @@ export function App() {
             <h2>Projects</h2>
           </div>
           <div className="projectList">
-            {sampleProjects.map((project) => (
+            {projects.map((project) => (
               <button
                 className={project.id === activeProject.id ? "projectButton active" : "projectButton"}
                 key={project.id}
@@ -254,6 +614,12 @@ export function App() {
             <p>{activeProject.description}</p>
           </div>
           <div className="topbarActions">
+            {isDbMode ? (
+              <button className="iconTextButton" onClick={signOut} type="button">
+                <LogOut size={18} />
+                Sign out
+              </button>
+            ) : null}
             <div className="searchBox">
               <Search size={18} />
               <input
@@ -281,8 +647,11 @@ export function App() {
           </div>
         </header>
 
+        {error ? <div className="appNotice">{error}</div> : null}
+        {dataLoading ? <div className="appNotice">Syncing with Supabase...</div> : null}
+
         <section className="metrics" aria-label="Agile performance metrics">
-          {sampleMetrics.map((metric) => (
+          {metrics.map((metric) => (
             <article className="metric" key={metric.label}>
               <Gauge size={18} />
               <div>
@@ -372,7 +741,7 @@ export function App() {
                     return (
                       <article className="taskCard" key={task.id}>
                         <div className="taskTopline">
-                          <span className={priorityClass[task.priority]}>{priorityLabels[task.priority]}</span>
+                          <span className={priorityClass[task.priority]}>{task.priority}</span>
                           <small>{task.storyPoints} pts</small>
                         </div>
                         <h4>{task.title}</h4>
@@ -405,7 +774,7 @@ export function App() {
                             className="impedimentEditor"
                             onSubmit={(event) => {
                               event.preventDefault();
-                              saveImpediment(task.id);
+                              void saveImpediment(task.id);
                             }}
                           >
                             <label htmlFor={`impediment-${task.id}`}>Impediment</label>
@@ -441,7 +810,7 @@ export function App() {
                           <button
                             aria-label={`Move ${task.title} left`}
                             disabled={lanes.indexOf(task.lane) === 0}
-                            onClick={() => moveTask(task.id, -1)}
+                            onClick={() => void moveTask(task.id, -1)}
                             title="Move left"
                             type="button"
                           >
@@ -459,11 +828,19 @@ export function App() {
                           <button
                             aria-label={`Move ${task.title} right`}
                             disabled={lanes.indexOf(task.lane) === lanes.length - 1 || hasUnresolvedDependencies}
-                            onClick={() => moveTask(task.id, 1)}
+                            onClick={() => void moveTask(task.id, 1)}
                             title={hasUnresolvedDependencies ? "Resolve dependencies first" : "Move right"}
                             type="button"
                           >
                             {task.lane === "accept" ? <CheckCircle2 size={16} /> : <ArrowRight size={16} />}
+                          </button>
+                          <button
+                            aria-label={`Delete ${task.title}`}
+                            onClick={() => void deleteTask(task.id)}
+                            title="Delete"
+                            type="button"
+                          >
+                            <Trash2 size={16} />
                           </button>
                         </div>
                       </article>
