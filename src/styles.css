@@ -16,6 +16,24 @@ body {
   min-width: 320px;
 }
 
+.startupError {
+  display: grid;
+  min-height: 100vh;
+  place-content: center;
+  padding: 24px;
+  text-align: center;
+}
+
+.startupError h1 {
+  font-size: 1.35rem;
+  margin: 0 0 8px;
+}
+
+.startupError p {
+  color: #55645f;
+  margin: 0;
+}
+
 button,
 input,
 textarea,
